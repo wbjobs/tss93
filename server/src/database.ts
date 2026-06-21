@@ -190,6 +190,128 @@ export function getOperations(branchId: string, fromVersion?: number): Operation
   return rows.map(row => JSON.parse(row.data));
 }
 
+export function getSnapshotByTimestamp(branchId: string, timestamp: number): NodeSnapshot | null {
+  const row = db.prepare(`
+    SELECT * FROM snapshots 
+    WHERE branchId = ? AND timestamp <= ?
+    ORDER BY timestamp DESC, version DESC
+    LIMIT 1
+  `).get(branchId, timestamp) as any;
+  if (!row) return null;
+  return {
+    nodes: JSON.parse(row.nodes),
+    version: row.version,
+    timestamp: row.timestamp,
+  };
+}
+
+export function getOperationsUpToTimestamp(branchId: string, timestamp: number): Operation[] {
+  const rows = db.prepare(`
+    SELECT * FROM operations 
+    WHERE branchId = ? AND timestamp <= ?
+    ORDER BY lamport ASC, timestamp ASC
+  `).all(branchId, timestamp) as any[];
+  return rows.map(row => JSON.parse(row.data));
+}
+
+export function getTimelineEvents(branchId: string): Array<{
+  timestamp: number;
+  type: string;
+  operation?: Operation;
+  version?: number;
+  description: string;
+}> {
+  const ops = getOperations(branchId);
+  const events: Array<{
+    timestamp: number;
+    type: string;
+    operation?: Operation;
+    version?: number;
+    description: string;
+  }> = [];
+
+  const branch = getBranch(branchId);
+  if (branch) {
+    events.push({
+      timestamp: branch.createdAt,
+      type: 'branch_create',
+      description: `分支"${branch.name}"创建`,
+    });
+  }
+
+  for (const op of ops) {
+    let description = '';
+    switch (op.type) {
+      case 'add':
+        description = `添加节点 "${(op as any).node?.text || op.nodeId.slice(0, 8)}"`;
+        break;
+      case 'update':
+        description = `更新节点 "${op.nodeId.slice(0, 8)}"`;
+        if ((op as any).changes?.text) {
+          description = `更新节点文本为 "${(op as any).changes.text}"`;
+        }
+        break;
+      case 'delete':
+        description = `删除节点 "${op.nodeId.slice(0, 8)}"`;
+        break;
+      case 'move':
+        description = `移动节点 "${op.nodeId.slice(0, 8)}"`;
+        break;
+      case 'collapse':
+        description = `折叠节点 "${op.nodeId.slice(0, 8)}"`;
+        break;
+      case 'uncollapse':
+        description = `展开节点 "${op.nodeId.slice(0, 8)}"`;
+        break;
+    }
+    events.push({
+      timestamp: op.timestamp,
+      type: op.type,
+      operation: op,
+      description,
+    });
+  }
+
+  events.sort((a, b) => a.timestamp - b.timestamp);
+  return events;
+}
+
+export function createBranchFromTimestamp(
+  name: string,
+  parentBranchId: string,
+  timestamp: number,
+  createdBy: string
+): Branch {
+  const snapshot = getSnapshotByTimestamp(parentBranchId, timestamp);
+  if (!snapshot) {
+    throw new Error('No snapshot found at the given timestamp');
+  }
+
+  const id = uuidv4();
+  const now = Date.now();
+
+  db.prepare(`
+    INSERT INTO branches (id, name, parentBranchId, parentSnapshotVersion, createdAt, createdBy, isMain, merged)
+    VALUES (?, ?, ?, ?, ?, ?, 0, 0)
+  `).run(id, name, parentBranchId, snapshot.version, now, createdBy);
+
+  db.prepare(`
+    INSERT INTO snapshots (branchId, version, nodes, timestamp)
+    VALUES (?, 1, ?, ?)
+  `).run(id, JSON.stringify(snapshot.nodes), now);
+
+  return {
+    id,
+    name,
+    parentBranchId,
+    parentSnapshotVersion: snapshot.version,
+    createdAt: now,
+    createdBy,
+    isMain: false,
+    merged: false,
+  };
+}
+
 export function createMergeRequest(sourceBranchId: string, targetBranchId: string, author: string, conflicts?: MergeConflict[]): MergeRequest {
   const id = uuidv4();
   const now = Date.now();

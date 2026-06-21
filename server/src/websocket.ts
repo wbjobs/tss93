@@ -60,7 +60,7 @@ function broadcastToBranch(branchId: string, message: WSMessage, excludeClientId
   }
 }
 
-function handleJoin(ws: WebSocket, payload: { branchId: string; userId: string }): void {
+function handleJoin(ws: WebSocket, payload: { branchId: string; userId: string }): Client {
   console.log('Join request:', payload);
   const clientId = uuidv4();
   const { branchId, userId } = payload;
@@ -74,22 +74,35 @@ function handleJoin(ws: WebSocket, payload: { branchId: string; userId: string }
   const snapshot = getSnapshot(branchId);
   const operations = getOperations(branchId);
 
-  ws.send(
-    JSON.stringify({
-      type: 'join',
-      payload: {
-        clientId,
-        branchId,
-        snapshot,
-        operations,
-      },
-    } as WSMessage)
-  );
+  console.log('Sending join response, snapshot version:', snapshot?.version, 'operations:', operations.length);
 
-  broadcastToBranch(branchId, {
-    type: 'join',
-    payload: { clientId, userId, message: `${userId} joined the branch` },
-  });
+  try {
+    ws.send(
+      JSON.stringify({
+        type: 'join',
+        payload: {
+          clientId,
+          branchId,
+          snapshot,
+          operations,
+        },
+      } as WSMessage)
+    );
+  } catch (sendError) {
+    console.error('Error sending join response:', sendError);
+  }
+
+  try {
+    broadcastToBranch(branchId, {
+      type: 'join',
+      payload: { clientId, userId, message: `${userId} joined the branch` },
+    });
+  } catch (broadcastError) {
+    console.error('Error broadcasting join:', broadcastError);
+  }
+
+  console.log('Join completed for client:', clientId);
+  return client;
 }
 
 function handleOperation(client: Client, payload: { operation: Operation }): void {
@@ -152,14 +165,7 @@ export function createWebSocketServer(wss: WebSocketServer): void {
         const message = JSON.parse(data.toString()) as WSMessage;
 
         if (message.type === 'join') {
-          handleJoin(ws, message.payload);
-          currentClient = clients.get(message.payload.clientId) || null;
-          if (!currentClient) {
-            const clientEntry = Array.from(clients.values()).find((c) => c.ws === ws);
-            if (clientEntry) {
-              currentClient = clientEntry;
-            }
-          }
+          currentClient = handleJoin(ws, message.payload);
         } else if (currentClient && message.type === 'operation') {
           handleOperation(currentClient, message.payload);
         }

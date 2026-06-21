@@ -2,7 +2,14 @@ import express from 'express';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import cors from 'cors';
-import { initDatabase } from './database';
+import {
+  initDatabase,
+  getSnapshotByTimestamp,
+  getTimelineEvents,
+  createBranchFromTimestamp,
+  getOperationsUpToTimestamp,
+  getBranch,
+} from './database';
 import {
   createWebSocketServer,
   handleCreateBranch,
@@ -108,6 +115,48 @@ app.post('/api/merge-requests/:id/merge', (req, res) => {
     const { id } = req.params;
     const result = handleMergeRequest(id);
     res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.get('/api/branches/:id/timeline', (req, res) => {
+  try {
+    const { id } = req.params;
+    const events = getTimelineEvents(id);
+    const branch = getBranch(id);
+    res.json({ branch, events });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.get('/api/branches/:id/snapshot-at', (req, res) => {
+  try {
+    const { id } = req.params;
+    const timestamp = parseInt(req.query.timestamp as string);
+    if (isNaN(timestamp)) {
+      return res.status(400).json({ error: 'Invalid timestamp' });
+    }
+    const snapshot = getSnapshotByTimestamp(id, timestamp);
+    const operations = getOperationsUpToTimestamp(id, timestamp);
+    if (!snapshot) {
+      return res.status(404).json({ error: 'Snapshot not found' });
+    }
+    res.json({ snapshot, operations });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.post('/api/branches/from-timestamp', (req, res) => {
+  try {
+    const { name, parentBranchId, timestamp, createdBy } = req.body;
+    if (!name || !parentBranchId || !timestamp || !createdBy) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    const branch = createBranchFromTimestamp(name, parentBranchId, timestamp, createdBy);
+    res.json({ branch });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
