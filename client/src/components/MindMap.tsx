@@ -286,14 +286,14 @@ export const MindMap: React.FC<MindMapProps> = ({ branchId, userId, currentVersi
         <button
           className="btn btn-secondary"
           onClick={handleAddSibling}
-          disabled={!selectedNodeId || (selectedNodeId && crdt?.getNode(selectedNodeId)?.parentId === null)}
+          disabled={!selectedNodeId || crdt?.getNode(selectedNodeId)?.parentId === null}
         >
           + 兄弟节点 (Enter)
         </button>
         <button
           className="btn btn-danger"
           onClick={handleDeleteNode}
-          disabled={!selectedNodeId || (selectedNodeId && crdt?.getNode(selectedNodeId)?.parentId === null)}
+          disabled={!selectedNodeId || crdt?.getNode(selectedNodeId)?.parentId === null}
         >
           删除节点 (Del)
         </button>

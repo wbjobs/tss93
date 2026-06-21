@@ -198,22 +198,78 @@ export function mergeBranches(
   const sourceNodes = sourceCRDT.getNodes();
   const targetNodes = targetCRDT.getNodes();
 
+  const sourceDeletedNodes = getDeletedNodes(baseNodes, sourceNodes, sourceOps);
+  const targetDeletedNodes = getDeletedNodes(baseNodes, targetNodes, targetOps);
+
+  const sourceOpsByNode = groupOpsByNode(sourceOps);
+  const targetOpsByNode = groupOpsByNode(targetOps);
+
   const conflicts: MergeConflict[] = [];
-  const mergedNodes: Record<string, MindMapNode> = { ...baseNodes };
+  let mergedNodes: Record<string, MindMapNode> = { ...baseNodes };
 
   const allNodeIds = new Set([
     ...Object.keys(sourceNodes),
     ...Object.keys(targetNodes),
     ...Object.keys(baseNodes),
+    ...sourceDeletedNodes.keys(),
+    ...targetDeletedNodes.keys(),
   ]);
-
-  const sourceOpsByNode = groupOpsByNode(sourceOps);
-  const targetOpsByNode = groupOpsByNode(targetOps);
 
   for (const nodeId of allNodeIds) {
     const inBase = nodeId in baseNodes;
     const inSource = nodeId in sourceNodes;
     const inTarget = nodeId in targetNodes;
+    const sourceDeleted = sourceDeletedNodes.has(nodeId);
+    const targetDeleted = targetDeletedNodes.has(nodeId);
+
+    if (sourceDeleted && targetDeleted) {
+      delete mergedNodes[nodeId];
+      continue;
+    }
+
+    if (sourceDeleted && !targetDeleted) {
+      const sourceDeleteOp = sourceDeletedNodes.get(nodeId);
+      const targetLastOp = findLastOpForNode(targetOpsByNode[nodeId] || []);
+      if (targetLastOp && sourceDeleteOp) {
+        if (targetLastOp.lamport > sourceDeleteOp.lamport) {
+          if (inTarget) {
+            mergedNodes[nodeId] = targetNodes[nodeId];
+          }
+          conflicts.push({
+            nodeId,
+            sourceChange: sourceDeleteOp,
+            targetChange: targetLastOp,
+          });
+        } else {
+          delete mergedNodes[nodeId];
+        }
+      } else if (sourceDeleteOp) {
+        delete mergedNodes[nodeId];
+      }
+      continue;
+    }
+
+    if (!sourceDeleted && targetDeleted) {
+      const targetDeleteOp = targetDeletedNodes.get(nodeId);
+      const sourceLastOp = findLastOpForNode(sourceOpsByNode[nodeId] || []);
+      if (sourceLastOp && targetDeleteOp) {
+        if (sourceLastOp.lamport > targetDeleteOp.lamport) {
+          if (inSource) {
+            mergedNodes[nodeId] = sourceNodes[nodeId];
+          }
+          conflicts.push({
+            nodeId,
+            sourceChange: sourceLastOp,
+            targetChange: targetDeleteOp,
+          });
+        } else {
+          delete mergedNodes[nodeId];
+        }
+      } else if (targetDeleteOp) {
+        delete mergedNodes[nodeId];
+      }
+      continue;
+    }
 
     if (!inBase && inSource && !inTarget) {
       mergedNodes[nodeId] = sourceNodes[nodeId];
@@ -223,8 +279,8 @@ export function mergeBranches(
       if (nodesEqual(sourceNodes[nodeId], targetNodes[nodeId])) {
         mergedNodes[nodeId] = sourceNodes[nodeId];
       } else {
-        const sourceOp = sourceOpsByNode[nodeId]?.[sourceOpsByNode[nodeId].length - 1];
-        const targetOp = targetOpsByNode[nodeId]?.[targetOpsByNode[nodeId].length - 1];
+        const sourceOp = findLastOpForNode(sourceOpsByNode[nodeId] || []);
+        const targetOp = findLastOpForNode(targetOpsByNode[nodeId] || []);
         if (sourceOp && targetOp) {
           conflicts.push({
             nodeId,
@@ -261,14 +317,76 @@ export function mergeBranches(
       } else {
         mergedNodes[nodeId] = baseNode;
       }
-    } else if (inBase && !inSource && inTarget) {
-      mergedNodes[nodeId] = targetNodes[nodeId];
-    } else if (inBase && inSource && !inTarget) {
-      mergedNodes[nodeId] = sourceNodes[nodeId];
     }
   }
 
+  mergedNodes = cleanupOrphanNodes(mergedNodes);
+
   return { mergedNodes, conflicts };
+}
+
+function getDeletedNodes(
+  baseNodes: Record<string, MindMapNode>,
+  finalNodes: Record<string, MindMapNode>,
+  ops: Operation[]
+): Map<string, Operation> {
+  const deleted = new Map<string, Operation>();
+  const deleteOps: Operation[] = [];
+
+  for (const op of ops) {
+    if (op.type === 'delete') {
+      deleteOps.push(op);
+    }
+  }
+
+  const tempCRDT = new MindMapCRDT(baseNodes);
+  for (const op of deleteOps) {
+    const beforeIds = new Set(Object.keys(tempCRDT.getNodes()));
+    tempCRDT.applyOperation(op);
+    const afterIds = new Set(Object.keys(tempCRDT.getNodes()));
+    for (const id of beforeIds) {
+      if (!afterIds.has(id)) {
+        deleted.set(id, op);
+      }
+    }
+  }
+
+  for (const nodeId of Object.keys(baseNodes)) {
+    if (!(nodeId in finalNodes) && !deleted.has(nodeId)) {
+      const deleteOp = deleteOps.find(o => o.nodeId === nodeId);
+      if (deleteOp) {
+        deleted.set(nodeId, deleteOp);
+      }
+    }
+  }
+
+  return deleted;
+}
+
+function cleanupOrphanNodes(nodes: Record<string, MindMapNode>): Record<string, MindMapNode> {
+  const result: Record<string, MindMapNode> = {};
+  const rootIds = new Set<string>();
+
+  for (const [id, node] of Object.entries(nodes)) {
+    if (node.parentId === null) {
+      rootIds.add(id);
+      result[id] = node;
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [id, node] of Object.entries(nodes)) {
+      if (id in result) continue;
+      if (node.parentId && node.parentId in result) {
+        result[id] = node;
+        changed = true;
+      }
+    }
+  }
+
+  return result;
 }
 
 function groupOpsByNode(ops: Operation[]): Record<string, Operation[]> {

@@ -218,17 +218,61 @@ export function handleCreateMergeRequest(
     throw new Error('Branch not found');
   }
 
-  const baseSnapshot = getSnapshot(sourceBranch.parentBranchId!, sourceBranch.parentSnapshotVersion);
-  if (!baseSnapshot) {
-    throw new Error('Base snapshot not found');
-  }
-
-  const sourceOps = getOperations(sourceBranchId, 0);
-  const targetOps = getOperations(targetBranchId, sourceBranch.parentSnapshotVersion);
+  const { baseSnapshot, sourceOps, targetOps } = getMergeBaseAndOps(sourceBranch, targetBranch);
 
   const { conflicts } = mergeBranches(baseSnapshot.nodes, sourceOps, targetOps);
 
   return createMergeRequest(sourceBranchId, targetBranchId, author, conflicts);
+}
+
+function getMergeBaseAndOps(
+  sourceBranch: any,
+  targetBranch: any
+): {
+  baseSnapshot: any;
+  sourceOps: Operation[];
+  targetOps: Operation[];
+} {
+  if (targetBranch.id === sourceBranch.parentBranchId) {
+    const baseSnapshot = getSnapshot(sourceBranch.parentBranchId!, sourceBranch.parentSnapshotVersion);
+    if (!baseSnapshot) {
+      throw new Error('Base snapshot not found');
+    }
+    const sourceOps = getOperations(sourceBranch.id, 0);
+    const targetOps = getOperations(targetBranch.id, sourceBranch.parentSnapshotVersion);
+    return { baseSnapshot, sourceOps, targetOps };
+  }
+
+  if (sourceBranch.id === targetBranch.parentBranchId) {
+    const baseSnapshot = getSnapshot(targetBranch.parentBranchId!, targetBranch.parentSnapshotVersion);
+    if (!baseSnapshot) {
+      throw new Error('Base snapshot not found');
+    }
+    const sourceOps = getOperations(sourceBranch.id, targetBranch.parentSnapshotVersion);
+    const targetOps = getOperations(targetBranch.id, 0);
+    return { baseSnapshot, sourceOps, targetOps };
+  }
+
+  if (
+    sourceBranch.parentBranchId === targetBranch.parentBranchId &&
+    sourceBranch.parentSnapshotVersion === targetBranch.parentSnapshotVersion
+  ) {
+    const baseSnapshot = getSnapshot(sourceBranch.parentBranchId!, sourceBranch.parentSnapshotVersion);
+    if (!baseSnapshot) {
+      throw new Error('Base snapshot not found');
+    }
+    const sourceOps = getOperations(sourceBranch.id, 0);
+    const targetOps = getOperations(targetBranch.id, 0);
+    return { baseSnapshot, sourceOps, targetOps };
+  }
+
+  const baseSnapshot = getSnapshot(sourceBranch.parentBranchId!, sourceBranch.parentSnapshotVersion);
+  if (!baseSnapshot) {
+    throw new Error('Base snapshot not found');
+  }
+  const sourceOps = getOperations(sourceBranch.id, 0);
+  const targetOps = getOperations(targetBranch.id, 0);
+  return { baseSnapshot, sourceOps, targetOps };
 }
 
 export function handleGetMergeRequests() {
@@ -290,11 +334,7 @@ export function handleMergeRequest(mergeRequestId: string) {
     throw new Error('Branch not found');
   }
 
-  const baseSnapshot = getSnapshot(sourceBranch.parentBranchId!, sourceBranch.parentSnapshotVersion);
-  if (!baseSnapshot) throw new Error('Base snapshot not found');
-
-  const sourceOps = getOperations(mr.sourceBranchId, 0);
-  const targetOps = getOperations(mr.targetBranchId, sourceBranch.parentSnapshotVersion);
+  const { baseSnapshot, sourceOps, targetOps } = getMergeBaseAndOps(sourceBranch, targetBranch);
 
   let { mergedNodes } = mergeBranches(baseSnapshot.nodes, sourceOps, targetOps);
 
